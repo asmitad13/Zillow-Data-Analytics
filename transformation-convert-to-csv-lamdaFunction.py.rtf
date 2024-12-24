@@ -1,0 +1,56 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2761
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 import boto3\
+import json\
+import pandas as pd\
+\
+s3_client = boto3.client('s3')\
+\
+def lambda_handler(event, context):\
+    # TODO implement\
+    source_bucket = event['Records'][0]['s3']['bucket']['name']\
+    object_key = event['Records'][0]['s3']['object']['key']\
+    \
+    target_bucket = 'cleaned-data-zone-csv-bucket'\
+    target_file_name = object_key[:-5]\
+    print(target_file_name)\
+   \
+    waiter = s3_client.get_waiter('object_exists')\
+    waiter.wait(Bucket=source_bucket, Key=object_key)\
+    \
+    response = s3_client.get_object(Bucket=source_bucket, Key=object_key)\
+    print(response)\
+    data = response['Body']\
+    print(data)\
+    data = response['Body'].read().decode('utf-8')\
+    print(data)\
+    data = json.loads(data)\
+    print(data)\
+    f = []\
+    for i in data["results"]:\
+        f.append(i)\
+    df = pd.DataFrame(f)\
+    # Select specific columns\
+    selected_columns = ['bathrooms', 'bedrooms', 'city', 'homeStatus', \
+                    'homeType','livingArea','price', 'rentZestimate','zipcode']\
+    df = df[selected_columns]\
+    print(df)\
+    \
+    # Convert DataFrame to CSV format\
+    csv_data = df.to_csv(index=False)\
+    \
+    # Upload CSV to S3\
+    bucket_name = target_bucket\
+    object_key = f"\{target_file_name\}.csv"\
+    s3_client.put_object(Bucket=bucket_name, Key=object_key, Body=csv_data)\
+    \
+    \
+    return \{\
+        'statusCode': 200,\
+        'body': json.dumps('CSV conversion and S3 upload completed successfully')\
+    \}}
