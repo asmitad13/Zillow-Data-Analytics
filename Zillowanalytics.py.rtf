@@ -1,0 +1,113 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2820
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 ArialMT;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;\red0\green0\blue0;\red183\green111\blue179;
+\red193\green193\blue193;\red89\green138\blue67;\red212\green214\blue154;\red194\green126\blue101;\red202\green202\blue202;
+\red70\green137\blue204;\red140\green211\blue254;\red167\green197\blue152;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;\csgray\c0\c0;\cssrgb\c77255\c52549\c75294;
+\cssrgb\c80000\c80000\c80000;\cssrgb\c41569\c60000\c33333;\cssrgb\c86275\c86275\c66667;\cssrgb\c80784\c56863\c47059;\cssrgb\c83137\c83137\c83137;
+\cssrgb\c33725\c61176\c83922;\cssrgb\c61176\c86275\c99608;\cssrgb\c70980\c80784\c65882;}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\deftab720
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs24 \cf2 \cb3 \expnd0\expndtw0\kerning0
+from airflow import DAG\
+from datetime import timedelta, datetime\
+import json\
+import requests\
+from airflow.operators.python import PythonOperator\
+from airflow.operators.bash_operator import BashOperator\
+from airflow.providers.amazon.aws.sensors.s3 import S3KeySensor\
+from airflow.providers.amazon.aws.transfers.s3_to_redshift import S3ToRedshiftOperator\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 # Load JSON config file\
+\pard\pardeftab720\partightenfactor0
+\cf2 with open('/home/ubuntu/airflow/config_api.json', 'r') as config_file:\
+    api_host_key = json.load(config_file)\
+\
+now = datetime.now()\
+dt_now_string = now.strftime("%d%m%Y%H%M%S")\
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 # Define the S3 bucket\
+s3_bucket = 'project-zillow-copy-cleaned-data-zone-csv-bucket'\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 def extract_zillow_data(**kwargs):\
+    url = kwargs['url']\
+    headers = kwargs['headers']\
+    querystring = kwargs['querystring']\
+    dt_string = kwargs['date_string']\
+    # return headers\
+    response = requests.get(url, headers=headers, params=querystring)\
+    response_data = response.json()\
+    \
+\
+    # Specify the output file path\
+    output_file_path = f"/home/ubuntu/response_data_\{dt_string\}.json"\
+    file_str = f'response_data_\{dt_string\}.csv'\
+\
+    # Write the JSON response to a file\
+    with open(output_file_path, "w") as output_file:\
+        json.dump(response_data, output_file, indent=4)  # indent for pretty formatting\
+    output_list = [output_file_path, file_str]\
+    return output_list   \
+\
+default_args = \{\
+    'owner': 'airflow',\
+    'depends_on_past': False,\
+    'start_date': datetime(2023, 8, 1),\
+    'email': ['myemail@domain.com'],\
+    'email_on_failure': False,\
+    'email_on_retry': False,\
+    'retries': 2,\
+    'retry_delay': timedelta(seconds=15)\
+\}\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 with DAG('zillow_analytics_dag',\
+        default_args=default_args,\
+        schedule_interval = '@daily',\
+        catchup=False) as dag:\
+\
+        extract_zillow_data_var = PythonOperator(\
+        task_id= 'tsk_extract_zillow_data_var',\
+        python_callable=extract_zillow_data,\
+        op_kwargs=\{'url': 'https://zillow56.p.rapidapi.com/search', 'querystring': \{"location":"houston, tx","output":"json","status":"forSale","sortSelection":"priorityscore"\}, 'headers': api_host_key, 'date_string':dt_now_string\}\
+        )\
+\
+        load_to_s3 = BashOperator(\
+            task_id = 'tsk_load_to_s3',\
+            bash_command = 'aws s3 mv \{\{ ti.xcom_pull("tsk_extract_zillow_data_var")[0]\}\} s3://projectzillowbucket/',\
+\
+        )\
+        \
+        is_file_in_s3_available = S3KeySensor(\
+        task_id='tsk_is_file_in_s3_available',\
+        bucket_key='\{\{ti.xcom_pull("tsk_extract_zillow_data_var")[1]\}\}',\
+        bucket_name=s3_bucket,\
+        aws_conn_id='aws_s3_conn',\
+        wildcard_match=False,  # Set this to True if you want to use wildcards in the prefix\
+        timeout=60,  # Optional: Timeout for the sensor (in seconds)\
+        poke_interval=5,  # Optional: Time interval between S3 checks (in seconds)\
+        )\
+        \
+\
+          transfer_s3_to_redshift = S3ToRedshiftOperator(\
+        task_id="tsk_transfer_s3_to_redshift",\
+        aws_conn_id='aws_s3_conn',\
+        redshift_conn_id='conn_id_redshift',\
+        s3_bucket=s3_bucket,\
+        s3_key='\{\{ti.xcom_pull("tsk_extract_zillow_data_var")[1]\}\}',\
+        schema="PUBLIC",\
+        table="zillowdata",\
+        copy_options=["csv IGNOREHEADER 1"],\
+    )\
+\
+        \
+        extract_zillow_data_var >> load_to_s3 >> is_file_in_s3_available >> fer_s3_to_redshiftZillow}
